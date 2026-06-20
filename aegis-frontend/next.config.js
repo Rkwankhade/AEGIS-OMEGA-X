@@ -1,8 +1,7 @@
-﻿/** @type {import('next').NextConfig} */
+/** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   images: {
-    domains: [],
     unoptimized: true,
   },
   env: {
@@ -10,7 +9,6 @@ const nextConfig = {
     NEXT_PUBLIC_GENOME_API_URL: process.env.NEXT_PUBLIC_GENOME_API_URL || 'http://localhost:8002',
     NEXT_PUBLIC_KNOWLEDGE_API_URL: process.env.NEXT_PUBLIC_KNOWLEDGE_API_URL || 'http://localhost:8003',
     NEXT_PUBLIC_GATEWAY_URL: process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8000',
-    NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8001/ws',
   },
 };
 module.exports = nextConfig;
