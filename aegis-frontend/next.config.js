@@ -1,9 +1,6 @@
-// aegis-frontend/next.config.js
-/** @type {import('next').NextConfig} */
+﻿/** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'standalone',
   reactStrictMode: true,
-  swcMinify: true,
   images: {
     domains: [],
     unoptimized: true,
@@ -41,6 +38,4 @@ const nextConfig = {
     return config;
   },
 };
-
 module.exports = nextConfig;
-
