@@ -1,0 +1,651 @@
+# AEGIS OMEGA X — HELM TEMPLATES
+# DEPLOY/helm/templates/deployments.yaml
+# Complete production Kubernetes resources for all services
+
+---
+# ── PDT API DEPLOYMENT ─────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-pdt-api
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: pdt-api
+    layer: "1"
+    system: aegis-omega-x
+    version: {{ .Values.global.image.tag | quote }}
+spec:
+  replicas: {{ .Values.pdtApi.replicas }}
+  selector:
+    matchLabels:
+      app: pdt-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: pdt-api
+        layer: "1"
+        system: aegis-omega-x
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8001"
+        prometheus.io/path:   "/metrics"
+    spec:
+      serviceAccountName: aegis-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: pdt-api
+          image: {{ .Values.global.image.registry }}/pdt-api:{{ .Values.global.image.tag }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8001
+              name: http
+          env:
+            - name: NEO4J_URI
+              value: bolt://{{ .Release.Name }}-neo4j:7687
+            - name: NEO4J_USER
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-neo4j-secret
+                  key: username
+            - name: NEO4J_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-neo4j-secret
+                  key: password
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-postgres-secret
+                  key: url
+            - name: REDIS_URL
+              value: redis://{{ .Release.Name }}-redis:6379
+            - name: KAFKA_BROKERS
+              value: {{ .Release.Name }}-kafka:29092
+            - name: ENVIRONMENT
+              value: {{ .Values.global.environment }}
+          resources:
+            requests:
+              memory: {{ .Values.pdtApi.resources.requests.memory }}
+              cpu:    {{ .Values.pdtApi.resources.requests.cpu }}
+            limits:
+              memory: {{ .Values.pdtApi.resources.limits.memory }}
+              cpu:    {{ .Values.pdtApi.resources.limits.cpu }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: pdt-api
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-pdt-api
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: pdt-api
+    system: aegis-omega-x
+spec:
+  selector:
+    app: pdt-api
+  ports:
+    - port: 8001
+      targetPort: 8001
+      name: http
+  type: ClusterIP
+
+---
+# ── GENOME API DEPLOYMENT ──────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-genome-api
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: genome-api
+    layer: "2"
+    system: aegis-omega-x
+spec:
+  replicas: {{ .Values.genomeApi.replicas }}
+  selector:
+    matchLabels:
+      app: genome-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: genome-api
+        layer: "2"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8002"
+    spec:
+      serviceAccountName: aegis-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: genome-api
+          image: {{ .Values.global.image.registry }}/genome-api:{{ .Values.global.image.tag }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          ports:
+            - containerPort: 8002
+              name: http
+          env:
+            - name: NEO4J_URI
+              value: bolt://{{ .Release.Name }}-neo4j:7687
+            - name: NEO4J_USER
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-neo4j-secret
+                  key: username
+            - name: NEO4J_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-neo4j-secret
+                  key: password
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-postgres-secret
+                  key: url
+            - name: REDIS_URL
+              value: redis://{{ .Release.Name }}-redis:6379
+            - name: KAFKA_BROKERS
+              value: {{ .Release.Name }}-kafka:29092
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "2"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-genome-api
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    app: genome-api
+  ports:
+    - port: 8002
+      targetPort: 8002
+      name: http
+
+---
+# ── KNOWLEDGE API DEPLOYMENT ───────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-knowledge-api
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: knowledge-api
+    layer: "3"
+    system: aegis-omega-x
+spec:
+  replicas: {{ .Values.knowledgeApi.replicas }}
+  selector:
+    matchLabels:
+      app: knowledge-api
+  template:
+    metadata:
+      labels:
+        app: knowledge-api
+        layer: "3"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8003"
+    spec:
+      serviceAccountName: aegis-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: knowledge-api
+          image: {{ .Values.global.image.registry }}/knowledge-api:{{ .Values.global.image.tag }}
+          ports:
+            - containerPort: 8003
+          env:
+            - name: NEO4J_URI
+              value: bolt://{{ .Release.Name }}-neo4j:7687
+            - name: NEO4J_USER
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-neo4j-secret
+                  key: username
+            - name: NEO4J_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-neo4j-secret
+                  key: password
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-postgres-secret
+                  key: url
+            - name: REDIS_URL
+              value: redis://{{ .Release.Name }}-redis:6379
+            - name: OPENSEARCH_URL
+              value: http://{{ .Release.Name }}-opensearch:9200
+            - name: KAFKA_BROKERS
+              value: {{ .Release.Name }}-kafka:29092
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "1"
+            limits:
+              memory: "4Gi"
+              cpu: "4"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-knowledge-api
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    app: knowledge-api
+  ports:
+    - port: 8003
+      targetPort: 8003
+
+---
+# ── AEGIS GATEWAY (Layers 4-14) DEPLOYMENT ────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-aegis-gateway
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: aegis-gateway
+    system: aegis-omega-x
+spec:
+  replicas: {{ .Values.aegisGateway.replicas }}
+  selector:
+    matchLabels:
+      app: aegis-gateway
+  template:
+    metadata:
+      labels:
+        app: aegis-gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8000"
+    spec:
+      serviceAccountName: aegis-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: aegis-gateway
+          image: {{ .Values.global.image.registry }}/aegis-gateway:{{ .Values.global.image.tag }}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: NEO4J_URI
+              value: bolt://{{ .Release.Name }}-neo4j:7687
+            - name: REDIS_URL
+              value: redis://{{ .Release.Name }}-redis:6379
+            - name: KAFKA_BROKERS
+              value: {{ .Release.Name }}-kafka:29092
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-postgres-secret
+                  key: url
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "1"
+            limits:
+              memory: "4Gi"
+              cpu: "4"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-aegis-gateway
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    app: aegis-gateway
+  ports:
+    - port: 8000
+      targetPort: 8000
+
+---
+# ── INGRESS ─────────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-ingress
+  namespace: {{ .Values.global.namespace }}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.aegis-omega-x.internal
+      secretName: aegis-tls-secret
+  rules:
+    - host: api.aegis-omega-x.internal
+      http:
+        paths:
+          - path: /pdt
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-pdt-api
+                port:
+                  number: 8001
+          - path: /genome
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-genome-api
+                port:
+                  number: 8002
+          - path: /knowledge
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-knowledge-api
+                port:
+                  number: 8003
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-aegis-gateway
+                port:
+                  number: 8000
+
+---
+# ── SERVICE ACCOUNT + RBAC ──────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aegis-api
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    system: aegis-omega-x
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aegis-api-role
+  namespace: {{ .Values.global.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aegis-api-rolebinding
+  namespace: {{ .Values.global.namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: aegis-api
+    namespace: {{ .Values.global.namespace }}
+roleRef:
+  kind: Role
+  name: aegis-api-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# ── HORIZONTAL POD AUTOSCALERS ──────────────────────────────────────────────
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-pdt-api-hpa
+  namespace: {{ .Values.global.namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Release.Name }}-pdt-api
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.cpuThreshold }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Release.Name }}-gateway-hpa
+  namespace: {{ .Values.global.namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Release.Name }}-aegis-gateway
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.cpuThreshold }}
+{{- end }}
+
+---
+# ── POD DISRUPTION BUDGETS ──────────────────────────────────────────────────
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-pdt-pdb
+  namespace: {{ .Values.global.namespace }}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: pdt-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}-gateway-pdb
+  namespace: {{ .Values.global.namespace }}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: aegis-gateway
+
+---
+# ── NETWORK POLICIES ────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aegis-default-deny
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aegis-api-policy
+  namespace: {{ .Values.global.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      system: aegis-omega-x
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              system: aegis-omega-x
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - port: 8000
+        - port: 8001
+        - port: 8002
+        - port: 8003
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              system: aegis-omega-x
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 443
+          protocol: TCP
+
+---
+# ── CONFIGMAPS ──────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aegis-config
+  namespace: {{ .Values.global.namespace }}
+data:
+  ENVIRONMENT:          {{ .Values.global.environment }}
+  LOG_LEVEL:            "INFO"
+  SIMULATION_TICK_MS:   "1000"
+  MAX_CASCADE_HOPS:     "10"
+  RISK_DECAY_FACTOR:    "0.7"
+  EMBEDDING_DIM:        "1536"
+  KAFKA_TOPIC_PREFIX:   "aegis"
+  INGESTION_BATCH_SIZE: "500"
+  INFERENCE_INTERVAL_H: "6"

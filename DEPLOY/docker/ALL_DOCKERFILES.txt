@@ -1,0 +1,161 @@
+# AEGIS OMEGA X — ALL SERVICE DOCKERFILES
+# One file per service, production-hardened
+
+# ═══════════════════════════════════════════════════════
+# PDT API — Dockerfile
+# MEGA-LAYER-1-PLANETARY-DIGITAL-TWIN/services/Dockerfile
+# ═══════════════════════════════════════════════════════
+# syntax=docker/dockerfile:1.6
+FROM python:3.11-slim AS base
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev curl && \
+    rm -rf /var/lib/apt/lists/* && \
+    addgroup --system aegis && adduser --system --group aegis
+
+WORKDIR /app
+
+FROM base AS builder
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+FROM base AS runtime
+COPY --from=builder /install /usr/local
+COPY --chown=aegis:aegis . .
+USER aegis
+EXPOSE 8001
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8001/health || exit 1
+CMD ["uvicorn", "pdt_api:app", "--host", "0.0.0.0", "--port", "8001", \
+     "--workers", "4", "--no-access-log"]
+
+# ═══════════════════════════════════════════════════════
+# GENOME API — Dockerfile
+# MEGA-LAYER-2-SECURITY-GENOME/services/Dockerfile
+# ═══════════════════════════════════════════════════════
+# syntax=docker/dockerfile:1.6
+FROM python:3.11-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev curl && rm -rf /var/lib/apt/lists/* && \
+    addgroup --system aegis && adduser --system --group aegis
+WORKDIR /app
+
+FROM base AS builder
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+FROM base AS runtime
+COPY --from=builder /install /usr/local
+COPY --chown=aegis:aegis . .
+USER aegis
+EXPOSE 8002
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8002/health || exit 1
+CMD ["uvicorn", "genome_api:app", "--host", "0.0.0.0", "--port", "8002", \
+     "--workers", "4", "--no-access-log"]
+
+# ═══════════════════════════════════════════════════════
+# KNOWLEDGE API — Dockerfile
+# MEGA-LAYER-3-KNOWLEDGE-UNIVERSE/services/Dockerfile
+# ═══════════════════════════════════════════════════════
+# syntax=docker/dockerfile:1.6
+FROM python:3.11-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev curl && rm -rf /var/lib/apt/lists/* && \
+    addgroup --system aegis && adduser --system --group aegis
+WORKDIR /app
+
+FROM base AS builder
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+FROM base AS runtime
+COPY --from=builder /install /usr/local
+COPY --chown=aegis:aegis . .
+USER aegis
+EXPOSE 8003
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8003/health || exit 1
+CMD ["uvicorn", "knowledge_api:app", "--host", "0.0.0.0", "--port", "8003", \
+     "--workers", "4", "--no-access-log"]
+
+# ═══════════════════════════════════════════════════════
+# AEGIS GATEWAY (Layers 4-14) — Dockerfile
+# MEGA-LAYERS-5-14/Dockerfile
+# ═══════════════════════════════════════════════════════
+# syntax=docker/dockerfile:1.6
+FROM python:3.11-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev curl && rm -rf /var/lib/apt/lists/* && \
+    addgroup --system aegis && adduser --system --group aegis
+WORKDIR /app
+
+FROM base AS builder
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+FROM base AS runtime
+COPY --from=builder /install /usr/local
+COPY --chown=aegis:aegis . .
+USER aegis
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+CMD ["uvicorn", "complete_implementation:gateway", \
+     "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--no-access-log"]
+
+# ═══════════════════════════════════════════════════════
+# SIMULATION CORE — Dockerfile (Rust multi-stage)
+# MEGA-LAYER-1-PLANETARY-DIGITAL-TWIN/backend/Dockerfile.sim
+# ═══════════════════════════════════════════════════════
+FROM rust:1.75-slim AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev cmake librdkafka-dev && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo "fn main(){}" > src/main.rs
+RUN cargo build --release
+RUN rm -f target/release/deps/sim_core*
+COPY src ./src
+RUN cargo build --release
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl3 librdkafka1 ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    addgroup --system aegis && adduser --system --group aegis
+COPY --from=builder /app/target/release/sim_core /usr/local/bin/sim_core
+USER aegis
+CMD ["sim_core"]
+
+# ═══════════════════════════════════════════════════════
+# FRONTEND — Dockerfile (Next.js)
+# aegis-frontend/Dockerfile
+# ═══════════════════════════════════════════════════════
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --only=production
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+FROM node:20-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN addgroup --system --gid 1001 aegis && \
+    adduser --system --uid 1001 aegis
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=aegis:aegis /app/.next/standalone ./
+COPY --from=builder --chown=aegis:aegis /app/.next/static ./.next/static
+USER aegis
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD wget -qO- http://localhost:3000/api/health || exit 1
+CMD ["node", "server.js"]

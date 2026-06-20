@@ -1,0 +1,492 @@
+# AEGIS OMEGA X — MEGA LAYER 1
+# PLANETARY DIGITAL TWIN — KUBERNETES INFRASTRUCTURE
+# infrastructure/k8s/pdt-namespace.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aegis-pdt
+  labels:
+    system: aegis-omega-x
+    layer: planetary-digital-twin
+    security-tier: critical
+
+---
+# ──────────────────────────────────────────────
+# NEO4J CLUSTER (StatefulSet)
+# ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: neo4j-cluster
+  namespace: aegis-pdt
+spec:
+  serviceName: neo4j
+  replicas: 3
+  selector:
+    matchLabels:
+      app: neo4j
+  template:
+    metadata:
+      labels:
+        app: neo4j
+    spec:
+      containers:
+        - name: neo4j
+          image: neo4j:5.15-enterprise
+          env:
+            - name: NEO4J_ACCEPT_LICENSE_AGREEMENT
+              value: "yes"
+            - name: NEO4J_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: neo4j-secret
+                  key: auth
+            - name: NEO4J_dbms_mode
+              value: CORE
+            - name: NEO4J_causal__clustering_minimum__core__cluster__size__at__formation
+              value: "3"
+            - name: NEO4J_dbms_memory_heap_initial__size
+              value: "4G"
+            - name: NEO4J_dbms_memory_heap_max__size
+              value: "8G"
+            - name: NEO4J_dbms_memory_pagecache_size
+              value: "8G"
+          ports:
+            - containerPort: 7474   # HTTP
+            - containerPort: 7687   # Bolt
+            - containerPort: 5000   # Cluster discovery
+            - containerPort: 6000   # Cluster transaction
+            - containerPort: 7000   # Cluster raft
+          volumeMounts:
+            - name: neo4j-data
+              mountPath: /data
+          resources:
+            requests:
+              memory: "16Gi"
+              cpu: "4"
+            limits:
+              memory: "24Gi"
+              cpu: "8"
+  volumeClaimTemplates:
+    - metadata:
+        name: neo4j-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 500Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: neo4j
+  namespace: aegis-pdt
+spec:
+  clusterIP: None
+  selector:
+    app: neo4j
+  ports:
+    - port: 7687
+      name: bolt
+    - port: 7474
+      name: http
+
+---
+# ──────────────────────────────────────────────
+# PDT INTELLIGENCE API (Deployment)
+# ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pdt-intelligence-api
+  namespace: aegis-pdt
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pdt-intelligence-api
+  template:
+    metadata:
+      labels:
+        app: pdt-intelligence-api
+    spec:
+      containers:
+        - name: api
+          image: aegis-omega-x/pdt-api:latest
+          ports:
+            - containerPort: 8001
+          env:
+            - name: NEO4J_URI
+              value: "bolt://neo4j:7687"
+            - name: NEO4J_USER
+              valueFrom:
+                secretKeyRef:
+                  name: neo4j-secret
+                  key: username
+            - name: NEO4J_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: neo4j-secret
+                  key: password
+            - name: KAFKA_BROKERS
+              value: "kafka-0.kafka:9092,kafka-1.kafka:9092,kafka-2.kafka:9092"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "2"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pdt-intelligence-api
+  namespace: aegis-pdt
+spec:
+  selector:
+    app: pdt-intelligence-api
+  ports:
+    - port: 8001
+      targetPort: 8001
+
+---
+# ──────────────────────────────────────────────
+# PDT SIMULATION CORE (StatefulSet — Rust)
+# ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pdt-simulation-core
+  namespace: aegis-pdt
+spec:
+  serviceName: pdt-simulation
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pdt-simulation-core
+  template:
+    metadata:
+      labels:
+        app: pdt-simulation-core
+    spec:
+      containers:
+        - name: sim-core
+          image: aegis-omega-x/pdt-sim-core:latest
+          env:
+            - name: TICK_INTERVAL_MS
+              value: "1000"
+            - name: NEO4J_URI
+              value: "bolt://neo4j:7687"
+            - name: KAFKA_BROKERS
+              value: "kafka-0.kafka:9092"
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "4"
+            limits:
+              memory: "16Gi"
+              cpu: "16"
+
+---
+# ──────────────────────────────────────────────
+# KAFKA CLUSTER
+# ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: aegis-pdt
+spec:
+  serviceName: kafka
+  replicas: 3
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: confluentinc/cp-kafka:7.5.0
+          env:
+            - name: KAFKA_BROKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: KAFKA_ZOOKEEPER_CONNECT
+              value: "zookeeper:2181"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://$(POD_NAME).kafka:9092"
+            - name: KAFKA_LOG_RETENTION_HOURS
+              value: "168"
+            - name: KAFKA_LOG_SEGMENT_BYTES
+              value: "1073741824"
+            - name: KAFKA_NUM_PARTITIONS
+              value: "32"
+            - name: KAFKA_DEFAULT_REPLICATION_FACTOR
+              value: "3"
+          ports:
+            - containerPort: 9092
+          volumeMounts:
+            - name: kafka-data
+              mountPath: /var/lib/kafka/data
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "2"
+            limits:
+              memory: "8Gi"
+              cpu: "4"
+  volumeClaimTemplates:
+    - metadata:
+        name: kafka-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 200Gi
+
+---
+# ──────────────────────────────────────────────
+# REDIS (State Cache)
+# ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: aegis-pdt
+spec:
+  serviceName: redis
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          command: ["redis-server", "--cluster-enabled", "yes",
+                    "--maxmemory", "4gb",
+                    "--maxmemory-policy", "allkeys-lru"]
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "1"
+            limits:
+              memory: "6Gi"
+              cpu: "2"
+
+---
+# ──────────────────────────────────────────────
+# POSTGRESQL (Relational metadata)
+# ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: aegis-pdt
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_DB
+              value: aegis_pdt
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1"
+            limits:
+              memory: "8Gi"
+              cpu: "4"
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: fast-ssd
+        resources:
+          requests:
+            storage: 100Gi
+
+---
+# ──────────────────────────────────────────────
+# PROMETHEUS + GRAFANA (Observability)
+# ──────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: aegis-pdt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.48.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--storage.tsdb.retention.time=30d"
+          ports:
+            - containerPort: 9090
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: aegis-pdt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.2.0
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secret
+                  key: admin-password
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1"
+
+---
+# ──────────────────────────────────────────────
+# HORIZONTAL POD AUTOSCALERS
+# ──────────────────────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: pdt-api-hpa
+  namespace: aegis-pdt
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pdt-intelligence-api
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+# ──────────────────────────────────────────────
+# NETWORK POLICIES
+# ──────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pdt-network-policy
+  namespace: aegis-pdt
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              system: aegis-omega-x
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              system: aegis-omega-x
+    - ports:
+        - port: 53    # DNS
+          protocol: UDP

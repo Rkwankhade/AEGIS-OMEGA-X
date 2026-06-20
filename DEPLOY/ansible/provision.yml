@@ -1,0 +1,465 @@
+---
+# AEGIS OMEGA X — ANSIBLE PLAYBOOK
+# Complete server provisioning for Kali Linux / Ubuntu 22.04+
+# DEPLOY/ansible/provision.yml
+
+- name: AEGIS OMEGA X — Complete System Provisioning
+  hosts: aegis_servers
+  become: true
+  vars:
+    aegis_user:       aegis
+    aegis_home:       /opt/aegis-omega-x
+    node_version:     "20"
+    go_version:       "1.22.3"
+    rust_version:     "stable"
+    docker_compose_version: "2.24.6"
+    python_version:   "3.11"
+
+  tasks:
+
+    # ─────────────────────────────────────────
+    # SYSTEM PREPARATION
+    # ─────────────────────────────────────────
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install base packages
+      apt:
+        name:
+          - curl wget git vim nano unzip zip jq tree
+          - build-essential gcc g++ make cmake
+          - software-properties-common
+          - apt-transport-https ca-certificates gnupg
+          - lsb-release net-tools netcat-openbsd
+          - python3 python3-pip python3-venv python3-dev
+          - libssl-dev libffi-dev libpq-dev
+          - postgresql-client redis-tools
+          - nmap tcpdump wireshark-common
+          - htop iotop sysstat
+        state: present
+
+    # ─────────────────────────────────────────
+    # CREATE AEGIS USER
+    # ─────────────────────────────────────────
+    - name: Create aegis user
+      user:
+        name:    "{{ aegis_user }}"
+        shell:   /bin/bash
+        home:    "{{ aegis_home }}"
+        groups:  [sudo, docker]
+        append:  yes
+        state:   present
+
+    - name: Create project directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ aegis_user }}"
+        group: "{{ aegis_user }}"
+        mode: "0755"
+      loop:
+        - "{{ aegis_home }}"
+        - "{{ aegis_home }}/logs"
+        - "{{ aegis_home }}/data"
+        - "{{ aegis_home }}/backups"
+        - "{{ aegis_home }}/certs"
+
+    # ─────────────────────────────────────────
+    # DOCKER
+    # ─────────────────────────────────────────
+    - name: Add Docker GPG key
+      apt_key:
+        url:   https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+        filename: docker
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Enable and start Docker
+      systemd:
+        name:    docker
+        enabled: yes
+        state:   started
+
+    - name: Add aegis user to docker group
+      user:
+        name:   "{{ aegis_user }}"
+        groups: docker
+        append: yes
+
+    # ─────────────────────────────────────────
+    # NODE.JS
+    # ─────────────────────────────────────────
+    - name: Install Node.js via NodeSource
+      block:
+        - name: Download NodeSource setup script
+          get_url:
+            url:  "https://deb.nodesource.com/setup_{{ node_version }}.x"
+            dest: /tmp/nodesource_setup.sh
+            mode: "0755"
+
+        - name: Run NodeSource setup
+          command: bash /tmp/nodesource_setup.sh
+
+        - name: Install nodejs
+          apt:
+            name:  nodejs
+            state: present
+            update_cache: yes
+
+    # ─────────────────────────────────────────
+    # GOLANG
+    # ─────────────────────────────────────────
+    - name: Download Go
+      get_url:
+        url:  "https://go.dev/dl/go{{ go_version }}.linux-amd64.tar.gz"
+        dest: /tmp/go.tar.gz
+        checksum: "sha256:8920ea521bad8f6b7bc377b4824982e011c19af27df88a815e3586ea895f1b36"
+
+    - name: Extract Go
+      unarchive:
+        src:        /tmp/go.tar.gz
+        dest:       /usr/local
+        remote_src: yes
+        creates:    /usr/local/go/bin/go
+
+    - name: Add Go to PATH
+      lineinfile:
+        path:   /etc/profile.d/go.sh
+        line:   'export PATH=$PATH:/usr/local/go/bin'
+        create: yes
+
+    # ─────────────────────────────────────────
+    # RUST
+    # ─────────────────────────────────────────
+    - name: Install Rust for aegis user
+      become_user: "{{ aegis_user }}"
+      shell: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --default-toolchain {{ rust_version }}
+      args:
+        creates: "{{ aegis_home }}/.cargo/bin/rustc"
+
+    # ─────────────────────────────────────────
+    # KUBECTL + HELM
+    # ─────────────────────────────────────────
+    - name: Install kubectl
+      block:
+        - name: Get latest kubectl version
+          uri:
+            url:              https://dl.k8s.io/release/stable.txt
+            return_content:   yes
+          register: kubectl_version
+
+        - name: Download kubectl
+          get_url:
+            url:  "https://dl.k8s.io/release/{{ kubectl_version.content | trim }}/bin/linux/amd64/kubectl"
+            dest: /usr/local/bin/kubectl
+            mode: "0755"
+
+    - name: Install Helm
+      shell: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \
+          | bash
+      args:
+        creates: /usr/local/bin/helm
+
+    # ─────────────────────────────────────────
+    # TERRAFORM
+    # ─────────────────────────────────────────
+    - name: Add HashiCorp GPG key
+      apt_key:
+        url:   https://apt.releases.hashicorp.com/gpg
+        state: present
+
+    - name: Add HashiCorp repository
+      apt_repository:
+        repo:     "deb [arch=amd64] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main"
+        state:    present
+        filename: hashicorp
+
+    - name: Install Terraform
+      apt:
+        name:  terraform
+        state: present
+        update_cache: yes
+
+    # ─────────────────────────────────────────
+    # PYTHON ENVIRONMENT
+    # ─────────────────────────────────────────
+    - name: Create Python venv for aegis
+      become_user: "{{ aegis_user }}"
+      command: python3 -m venv {{ aegis_home }}/.venv
+      args:
+        creates: "{{ aegis_home }}/.venv/bin/activate"
+
+    - name: Install Python dependencies
+      become_user: "{{ aegis_user }}"
+      pip:
+        name:
+          - fastapi
+          - uvicorn[standard]
+          - neo4j
+          - aiokafka
+          - redis
+          - aioredis
+          - asyncpg
+          - psycopg2-binary
+          - pydantic
+          - httpx
+          - aiohttp
+          - numpy
+          - scikit-learn
+          - sentence-transformers
+          - stix2
+          - taxii2-client
+          - pyyaml
+          - prometheus-client
+          - pytest
+          - pytest-asyncio
+          - boto3
+        virtualenv: "{{ aegis_home }}/.venv"
+        state: present
+
+    # ─────────────────────────────────────────
+    # SECURITY TOOLS
+    # ─────────────────────────────────────────
+    - name: Install security scanning tools
+      apt:
+        name:
+          - nmap
+          - masscan
+          - nikto
+          - sqlmap
+          - dirb
+          - gobuster
+        state: present
+
+    - name: Install Trivy
+      shell: |
+        curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+          | sh -s -- -b /usr/local/bin
+      args:
+        creates: /usr/local/bin/trivy
+
+    - name: Install Gitleaks
+      shell: |
+        LATEST=$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+          | grep tag_name | cut -d '"' -f4)
+        wget "https://github.com/gitleaks/gitleaks/releases/download/${LATEST}/gitleaks_${LATEST#v}_linux_x64.tar.gz" \
+          -O /tmp/gitleaks.tar.gz
+        tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
+        chmod +x /usr/local/bin/gitleaks
+      args:
+        creates: /usr/local/bin/gitleaks
+
+    # ─────────────────────────────────────────
+    # FIREWALL RULES
+    # ─────────────────────────────────────────
+    - name: Install UFW
+      apt:
+        name:  ufw
+        state: present
+
+    - name: Allow SSH
+      ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+
+    - name: Allow AEGIS API ports
+      ufw:
+        rule:  allow
+        port:  "{{ item }}"
+        proto: tcp
+      loop: ["8000","8001","8002","8003","3001","9090","3000"]
+
+    - name: Enable UFW
+      ufw:
+        state:   enabled
+        policy:  deny
+        logging: "on"
+
+    # ─────────────────────────────────────────
+    # SYSTEMD SERVICES
+    # ─────────────────────────────────────────
+    - name: Create PDT API systemd service
+      copy:
+        dest: /etc/systemd/system/aegis-pdt-api.service
+        content: |
+          [Unit]
+          Description=AEGIS OMEGA X — PDT Intelligence API
+          After=network.target docker.service
+
+          [Service]
+          Type=simple
+          User={{ aegis_user }}
+          WorkingDirectory={{ aegis_home }}/MEGA-LAYER-1-PLANETARY-DIGITAL-TWIN/services
+          Environment=PATH={{ aegis_home }}/.venv/bin:/usr/local/bin:/usr/bin:/bin
+          ExecStart={{ aegis_home }}/.venv/bin/uvicorn pdt_api:app \
+            --host 0.0.0.0 --port 8001 --workers 4 --no-access-log
+          Restart=always
+          RestartSec=5
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=aegis-pdt-api
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Create Genome API systemd service
+      copy:
+        dest: /etc/systemd/system/aegis-genome-api.service
+        content: |
+          [Unit]
+          Description=AEGIS OMEGA X — Genome API
+          After=network.target docker.service
+
+          [Service]
+          Type=simple
+          User={{ aegis_user }}
+          WorkingDirectory={{ aegis_home }}/MEGA-LAYER-2-SECURITY-GENOME/services
+          Environment=PATH={{ aegis_home }}/.venv/bin:/usr/local/bin:/usr/bin:/bin
+          ExecStart={{ aegis_home }}/.venv/bin/uvicorn genome_api:app \
+            --host 0.0.0.0 --port 8002 --workers 4 --no-access-log
+          Restart=always
+          RestartSec=5
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=aegis-genome-api
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Create Gateway systemd service
+      copy:
+        dest: /etc/systemd/system/aegis-gateway.service
+        content: |
+          [Unit]
+          Description=AEGIS OMEGA X — Unified Gateway (Layers 4-14)
+          After=network.target docker.service
+
+          [Service]
+          Type=simple
+          User={{ aegis_user }}
+          WorkingDirectory={{ aegis_home }}/MEGA-LAYERS-5-14
+          Environment=PATH={{ aegis_home }}/.venv/bin:/usr/local/bin:/usr/bin:/bin
+          ExecStart={{ aegis_home }}/.venv/bin/uvicorn complete_implementation:gateway \
+            --host 0.0.0.0 --port 8000 --workers 2 --no-access-log
+          Restart=always
+          RestartSec=5
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=aegis-gateway
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable AEGIS services
+      systemd:
+        name:    "{{ item }}"
+        enabled: yes
+        state:   stopped
+      loop:
+        - aegis-pdt-api.service
+        - aegis-genome-api.service
+        - aegis-gateway.service
+
+    # ─────────────────────────────────────────
+    # LOG ROTATION
+    # ─────────────────────────────────────────
+    - name: Configure log rotation
+      copy:
+        dest: /etc/logrotate.d/aegis-omega-x
+        content: |
+          {{ aegis_home }}/logs/*.log {
+              daily
+              rotate 14
+              compress
+              delaycompress
+              missingok
+              notifempty
+              copytruncate
+          }
+
+    # ─────────────────────────────────────────
+    # ALIASES + PROFILE
+    # ─────────────────────────────────────────
+    - name: Add AEGIS aliases to aegis user profile
+      become_user: "{{ aegis_user }}"
+      blockinfile:
+        path:   "{{ aegis_home }}/.bashrc"
+        create: yes
+        marker: "# {mark} AEGIS OMEGA X ALIASES"
+        block: |
+          # AEGIS OMEGA X
+          export AEGIS_HOME="{{ aegis_home }}"
+          export PATH=$PATH:/usr/local/go/bin:$HOME/.cargo/bin
+
+          source $AEGIS_HOME/.venv/bin/activate 2>/dev/null || true
+
+          alias aegis-start='cd $AEGIS_HOME/DEPLOY/docker && docker compose up -d'
+          alias aegis-stop='cd $AEGIS_HOME/DEPLOY/docker && docker compose down'
+          alias aegis-status='docker compose -f $AEGIS_HOME/DEPLOY/docker/docker-compose.yml ps'
+          alias aegis-logs='docker compose -f $AEGIS_HOME/DEPLOY/docker/docker-compose.yml logs -f'
+          alias aegis-neo4j='docker exec -it aegis-neo4j cypher-shell -u neo4j -p AegisOmegaX2024!'
+          alias aegis-redis='docker exec -it aegis-redis redis-cli'
+          alias aegis-psql='docker exec -it aegis-postgres psql -U aegis -d aegis_omega'
+          alias aegis-pdt='curl -s http://localhost:8001/health | jq .'
+          alias aegis-genome='curl -s http://localhost:8002/health | jq .'
+          alias aegis-ku='curl -s http://localhost:8003/health | jq .'
+          alias aegis-gw='curl -s http://localhost:8000/health | jq .'
+          alias aegis-test='cd $AEGIS_HOME && python -m pytest DEPLOY/tests/ -v'
+
+          echo "AEGIS OMEGA X environment loaded"
+
+    # ─────────────────────────────────────────
+    # FINAL VERIFICATION
+    # ─────────────────────────────────────────
+    - name: Verify installations
+      command: "{{ item.cmd }}"
+      register: "{{ item.reg }}"
+      changed_when: false
+      loop:
+        - { cmd: "docker --version",    reg: docker_ver }
+        - { cmd: "node --version",       reg: node_ver }
+        - { cmd: "go version",           reg: go_ver }
+        - { cmd: "kubectl version --client --short", reg: kubectl_ver }
+        - { cmd: "helm version --short", reg: helm_ver }
+        - { cmd: "terraform version",    reg: tf_ver }
+        - { cmd: "trivy --version",      reg: trivy_ver }
+
+    - name: Print installation summary
+      debug:
+        msg: |
+          ╔═══════════════════════════════════════════════╗
+          ║  AEGIS OMEGA X — PROVISIONING COMPLETE        ║
+          ╠═══════════════════════════════════════════════╣
+          ║  Docker:     {{ docker_ver.stdout }}
+          ║  Node.js:    {{ node_ver.stdout }}
+          ║  Go:         {{ go_ver.stdout }}
+          ║  kubectl:    {{ kubectl_ver.stdout }}
+          ║  Helm:       {{ helm_ver.stdout }}
+          ║  Terraform:  {{ tf_ver.stdout_lines[0] }}
+          ║  Trivy:      {{ trivy_ver.stdout_lines[0] }}
+          ╚═══════════════════════════════════════════════╝

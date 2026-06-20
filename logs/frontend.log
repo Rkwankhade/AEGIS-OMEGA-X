@@ -1,0 +1,17 @@
+
+> aegis-omega-x-frontend@14.0.0 dev
+> next dev --port 3001
+
+   ▲ Next.js 14.1.0
+   - Local:        http://localhost:3001
+   - Environments: .env.local
+   - Experiments (use at your own risk):
+     · optimizeCss
+
+ ✓ Ready in 1631ms
+ ○ Compiling / ...
+ ✓ Compiled / in 1539ms (420 modules)
+ ✓ Compiled /master in 327ms (478 modules)
+ ✓ Compiled /pdt in 136ms (484 modules)
+ ✓ Compiled /genome in 97ms (490 modules)
+ ✓ Compiled /knowledge in 123ms (496 modules)

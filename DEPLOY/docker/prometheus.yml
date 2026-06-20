@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: aegis-omega-x
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: aegis-pdt-api
+    static_configs:
+      - targets: ["host.docker.internal:8001"]
+
+  - job_name: aegis-genome-api
+    static_configs:
+      - targets: ["host.docker.internal:8002"]
+
+  - job_name: aegis-knowledge-api
+    static_configs:
+      - targets: ["host.docker.internal:8003"]
+
+  - job_name: aegis-gateway
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka:9999"]
