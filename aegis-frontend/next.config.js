@@ -4,9 +4,6 @@ const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   swcMinify: true,
-  experimental: {
-    optimizeCss: true,
-  },
   images: {
     domains: [],
     unoptimized: true,
@@ -46,3 +43,4 @@ const nextConfig = {
 };
 
 module.exports = nextConfig;
+
