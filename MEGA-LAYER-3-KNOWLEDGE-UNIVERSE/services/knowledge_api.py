@@ -29,8 +29,9 @@ app = FastAPI(
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 
-NEO4J_URI  = "bolt://neo4j:7687"
-NEO4J_AUTH = ("neo4j", "aegis-omega-x")
+import os
+NEO4J_URI  = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_AUTH = (os.getenv("NEO4J_USERNAME", "neo4j"), os.getenv("NEO4J_PASSWORD", "aegis-omega-x"))
 driver     = AsyncGraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
 embedder   = SecurityKnowledgeEmbedder()
 redis_client = None
