@@ -211,8 +211,8 @@ async def run_cascade_simulation(req: CascadeSimulationRequest) -> CascadeSimula
 
     # Synthetic entity mapping (one entity per 10 assets)
     affected_entities = list(set(
-        f"entity-{int(a.split('-')[-1]) // 10 if a.split('-')[-1].isdigit() else 0}"
-        for a in affected
+            f"entity-{int(a.split('-')[-1]) // 10 if a and a.split('-')[-1].isdigit() else 0}"
+            for a in affected if a is not None
     ))
 
     economic_impact = len(affected) * random.uniform(50_000, 500_000)
