@@ -186,7 +186,7 @@ async def run_cascade_simulation(req: CascadeSimulationRequest) -> CascadeSimula
 
     # Try to get real neighbors from graph; fallback to synthetic
     try:
-        all_neighbors = await get_asset_neighbors(req.origin_asset_id, req.max_hops)
+        all_neighbors = [x for x in await get_asset_neighbors(req.origin_asset_id, req.max_hops) if x is not None and isinstance(x, str)]
     except Exception:
         # Synthetic fallback for demo
         all_neighbors = [f"synth-asset-{i}" for i in range(20)]
@@ -221,9 +221,9 @@ async def run_cascade_simulation(req: CascadeSimulationRequest) -> CascadeSimula
     return CascadeSimulationResult(
         simulation_id=str(uuid.uuid4()),
         origin_asset_id=req.origin_asset_id,
-        affected_assets=affected,
+        affected_assets=[a for a in affected if a is not None and isinstance(a, str)],
         affected_entities=affected_entities,
-        propagation_path=propagation_path,
+        propagation_path=[p for p in propagation_path if p is not None and isinstance(p, str)],
         blast_radius=len(affected),
         estimated_economic_impact_usd=economic_impact,
         severity=req.severity,
